@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        #Map_USA {
+            position: absolute;
+            top: 0;
+            right: 0; 
+            height: auto;
+        }
+
+    </style>
+    <meta charset="UTF-8">
+    <title>File Query App</title>
+    <script>
+        async function startProcessing() {
+            // Disable the button to prevent multiple clicks
+            const startButton = document.getElementById("start-button");
+            startButton.disabled = true;
+
+             // Clear the results textbox
+            const textbox = document.getElementById('results');
+            textbox.value = ''; // Clear the textbox upon starting
+
+            // Get form data
+            const formData = new FormData(document.getElementById('query-form'));
+            const data = Object.fromEntries(formData.entries());
+
+            // Convert string inputs to numbers
+            data.year = parseInt(data.year);
+            data.month = parseInt(data.month);
+            data.day = parseInt(data.day);
+
+            try {
+                // Start processing by sending a POST request
+                const response = await fetch('/start_query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    pollProgress(); // Start polling for progress
+                } else {
+                    const message = await response.json();
+                    alert(message.message); // Notify user that processing is already running
+                }
+            } catch (error) {
+                console.error("Error starting processing:", error);
+                alert("An error occurred while starting processing.");
+            } finally {
+                // Re-enable the button after handling the request
+                startButton.disabled = false;
+            }
+        }
+
+        async function pollProgress() {
+            const processedFiles = new Set(); // Track unique files already displayed
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch('/get_progress');
+                    const data = await response.json();
+
+                    // Stop polling if no files are found
+                    if (data.progress.status === "no_files") {
+                        clearInterval(interval);
+                        alert("No files found for the specified date. Please check your input.");
+                        return;
+                    }
+
+                    if (data.progress.status === "stopped") {
+                        clearInterval(pollingInterval);
+                        alert("Query stopped. Results are preserved.");
+                        return;
+                    }
+
+                    // Stop polling if processing is complete
+                    if (data.progress.status === "completed") {
+                        clearInterval(interval);
+                        alert("Processing complete!");
+                    }
+
+                    // Update the progress counter
+                    const counter = document.getElementById('counter');
+                    const filesLeft = data.progress.total_files - data.progress.files_processed;
+                    counter.innerText = `Files Left: ${filesLeft}`;
+
+                    // Update the results textbox with unique files
+                    const textbox = document.getElementById('results');
+                    data.results.forEach((file) => {
+                        if (!processedFiles.has(file.file)) {
+                            processedFiles.add(file.file);
+                            textbox.value += `File: ${file.file}\n`;
+                            textbox.value += `Lat Range: ${file.lat_min} to ${file.lat_max}, Lon Range: ${file.long_min} to ${file.long_max}\n\n`;
+                        }
+                    });
+                } catch (error) {
+                    clearInterval(interval);
+                    console.error("Error polling progress:", error);
+                    alert("An error occurred while checking progress.");
+                }
+            }, 2000);
+        }
+
+        async function stopProcessing() {
+            try {
+                const response = await fetch('/stop_query', { method: 'POST' });
+
+                if (response.ok) {
+                    const message = await response.json();
+                    alert(message.message); // Notify user that the query is stopping
+                } else {
+                    alert("No query is currently running.");
+                }
+            } catch (error) {
+                console.error("Error stopping query:", error);
+                alert("An error occurred while stopping the query.");
+            }
+        }
+
+        //downloading the files
+        async function downloadAllFilesAsZip() {
+
+            const year = document.getElementById("year").value
+            const month = document.getElementById("month").value
+            const day = document.getElementById("day").value
+
+            try {
+                const response = await fetch('/download_all_files');
+
+                if (!response.ok) {
+                    alert("Failed to download files as ZIP.");
+                    return;
+                }
+
+                // Create a blob from the response
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+
+                // Create a link element and trigger the download
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `NUCAPS-CCR_${year}-${month}-${day}.zip`; // Name for the ZIP file
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (error) {
+                console.error("Error downloading ZIP file:", error);
+                alert("An error occurred while downloading the ZIP file.");
+            }
+        }
+        
+    </script>
+</head>
+<body>
+    <img id="Map_USA" src="/plot.png" alt="Map of USA">
+
+    <h1>Alaska Cris Data Query App</h1>
+    <div id="Header_Message">
+        Data only available for September 2022 - October 2023. Some days not available.
+        <a href = "https://noaa-jpss.s3.amazonaws.com/index.html#NOAA20/SOUNDINGS/NOAA20_NUCAPS-CCR/">See available days</a>.
+    </div>
+    <form id="query-form">
+        <label for="year">Year:</label>
+        <input type="number" id="year" name="year" required><br>
+        <label for="month">Month:</label>
+        <input type="number" id="month" name="month" required><br>
+        <label for="day">Day:</label>
+        <input type="number" id="day" name="day" required><br>
+        <button type="button" id="start-button" onclick="startProcessing()">Start Processing</button>
+    </form>
+    <button type="button" id="stop-button" onclick="stopProcessing()">Stop Query</button>
+    <button onclick="downloadAllFilesAsZip()">Download All Files as ZIP</button>
+    <h2 id="counter">Files Left: 0</h2>
+    <textarea id="results" rows="10" cols="50" readonly></textarea>    
+    <img id="Map_USA" src="/plot.png" alt="Map of USA">
+</body>
+</html>
