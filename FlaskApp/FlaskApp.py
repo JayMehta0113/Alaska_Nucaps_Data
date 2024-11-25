@@ -13,6 +13,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import matplotlib
+import gridding as gridding
 
 app = Flask(__name__)
 
@@ -178,24 +179,62 @@ def get_progress():
 
 #static map
 matplotlib.use('agg') 
-@app.route("/plot.png")
-def plot_map():
-    fig = create_map()
-    output = io.BytesIO()
-    FigureCanvas(fig).print_png(output)
-    return Response(output.getvalue(), mimetype="image/png")
+# @app.route("/plot.png")
+# def plot_map():
+#     fig = create_map()
+#     output = io.BytesIO()
+#     FigureCanvas(fig).print_png(output)
+#     return Response(output.getvalue(), mimetype="image/png")
 
-def create_map():
-    fig = plt.figure(figsize=(6, 4))
-    ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-    ax.set_extent([-179, -140, 50, 75], crs=ccrs.PlateCarree())
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
-    ax.add_feature(cfeature.COASTLINE)
-    ax.add_feature(cfeature.BORDERS, linestyle=":")
-    ax.add_feature(cfeature.LAKES, alpha=0.5)
-    ax.add_feature(cfeature.RIVERS)
-    return fig
+# def create_map():
+#     fig = plt.figure(figsize=(6, 4))
+#     ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
+#     ax.set_extent([-179, -140, 50, 75], crs=ccrs.PlateCarree())
+#     ax.add_feature(cfeature.LAND)
+#     ax.add_feature(cfeature.OCEAN)
+#     ax.add_feature(cfeature.COASTLINE)
+#     ax.add_feature(cfeature.BORDERS, linestyle=":")
+#     ax.add_feature(cfeature.LAKES, alpha=0.5)
+#     ax.add_feature(cfeature.RIVERS)
+#     return fig
+
+@app.route("/grid_and_render", methods=["POST"])
+def grid_and_render():
+    """Grid data using files from the results list and return a map as a binary PNG."""
+    try:
+        global results
+        bucket_name = "noaa-jpss"
+        client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+
+        if not results:
+            return jsonify({"error": "No files available in results for gridding"}), 400
+
+        # Fetch file objects from S3 using results
+        file_streams = []
+        for result in results:
+            file_key = result["file"]
+            response = client_s3.get_object(Bucket=bucket_name, Key=file_key)
+            file_stream = io.BytesIO(response["Body"].read())
+            file_streams.append(file_stream)
+
+        # Define geographic bounds and resolution
+        lat_min, lat_max = 50, 75
+        lon_min, lon_max = -179, -140
+        resolution = 0.25
+
+        # Call the gridding function
+        plot_png = gridding.process_and_grid(
+            file_streams, lat_min, lat_max, lon_min, lon_max, resolution
+        )
+
+        # Return the PNG image
+        return Response(plot_png, mimetype="image/png")
+
+    except Exception as e:
+        print(f"Error during gridding: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
