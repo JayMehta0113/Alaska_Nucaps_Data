@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -155,6 +156,28 @@
                 alert("An error occurred while downloading the ZIP file.");
             }
         }
+
+        async function generateMap() {
+            try {
+                const response = await fetch('/grid_and_render', { method: 'POST' });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || "Failed to generate map.");
+                }
+
+                const blob = await response.blob();
+                const objectURL = URL.createObjectURL(blob);
+
+                // Update the image source
+                const mapViewer = document.getElementById("Map_USA");
+                mapViewer.src = objectURL;
+            } catch (error) {
+                console.error("Error generating map:", error);
+                alert("Failed to generate map.");
+            }
+        }
+
         
     </script>
 </head>
@@ -177,6 +200,7 @@
     </form>
     <button type="button" id="stop-button" onclick="stopProcessing()">Stop Query</button>
     <button onclick="downloadAllFilesAsZip()">Download All Files as ZIP</button>
+    <button type="button" onclick="generateMap()">Generate Map</button>
     <h2 id="counter">Files Left: 0</h2>
     <textarea id="results" rows="10" cols="50" readonly></textarea>    
     <img id="Map_USA" src="/plot.png" alt="Map of USA">
