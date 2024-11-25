@@ -1,4 +1,4 @@
-name: test
+name: nucaps_download_app
 channels:
   - defaults
   - https://repo.anaconda.com/pkgs/main
