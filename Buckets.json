@@ -1,0 +1,15 @@
+{
+    "buckets":
+    [
+        {
+            "name": "noaa-jpss",
+            "prefix": "NOAA20/SOUNDINGS/NOAA20_NUCAPS-CCR/"
+        },
+
+        {
+            
+        }
+
+
+    ]
+}

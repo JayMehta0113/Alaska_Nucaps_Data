@@ -1,0 +1,21 @@
+name: Nucaps_data_app
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13.1
+  - flask
+  - boto3
+  - xarray
+  - dask
+  - matplotlib
+  - cartopy
+  - h5netcdf  
+  - pandas
+  - numpy
+  - scipy
+  - shapely
+  - pyproj
+  - werkzeug
+  - tornado
+  - certifi
