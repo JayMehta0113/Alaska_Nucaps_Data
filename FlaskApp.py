@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify, Response, g, session #
+from flask import Flask, request, render_template, jsonify, Response #
 import boto3 #
 from botocore.config import Config
 from botocore import UNSIGNED
@@ -7,15 +7,10 @@ import os
 import zipfile
 import io
 import threading
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas #
-from matplotlib.figure import Figure
-import cartopy.crs as ccrs #
-import cartopy.feature as cfeature
-import matplotlib.pyplot as plt
 import matplotlib
 from gridding import Radiance_gridding, AOD_gridding
-import json
 import re
+import redis
 
 app = Flask(__name__)
 
@@ -240,6 +235,7 @@ def grid_and_render():
     global results
 
     print('made it to grid route')
+    #print(sys.getsizeof(results))
 
     try:
         """bucket is named/files are pulled inside of specific gridding class to allow for this fucntion 
