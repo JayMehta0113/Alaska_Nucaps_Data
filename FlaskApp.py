@@ -1,4 +1,6 @@
-from flask import Flask, request, render_template, jsonify, Response #
+from flask import Flask, request, render_template, jsonify, Response, session, g #
+from concurrent.futures import ThreadPoolExecutor
+from flask_session import Session
 import boto3 #
 from botocore.config import Config
 from botocore import UNSIGNED
@@ -10,135 +12,176 @@ import threading
 import matplotlib
 from gridding import Radiance_gridding, AOD_gridding
 import re
-import redis
+import redis 
+import secrets
+import json
+from utils import list_all_files, open_s3_dataset, filter_data
+
 
 app = Flask(__name__)
 
-# Global variables for results and progress
-results = []
-progress = {"total_files": 0, "files_processed": 0}
+# Setting up session
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_USE_SIGNER"] = True
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "fallback-secret-key")
+Session(app)
 
-#code to open the amazon s3 bucket 
-def open_s3_dataset(bucket, key, client_s3):
-    """Open a dataset from S3."""
-    response = client_s3.get_object(Bucket=bucket, Key=key)
-    data = response["Body"].read()
-    data_io = io.BytesIO(data)
-    return xr.open_dataset(data_io, engine="h5netcdf", chunks={}, decode_times=False)
+redis_client = redis.StrictRedis(host="localhost", port=6379, decode_responses=True)
 
-def filter_data(dataset, lat_min, lat_max, long_min, long_max):
-    """Filter dataset based on latitude and longitude."""
-    lat_mask = ((dataset["CrIS_Latitude"] >= lat_min) & (dataset["CrIS_Latitude"] <= lat_max)).compute()
-    long_mask = ((dataset["CrIS_Longitude"] >= long_min) & (dataset["CrIS_Longitude"] <= long_max)).compute()
-    combined_mask = lat_mask & long_mask
-    filtered_data = dataset.where(combined_mask, drop=True)
+global_lock = threading.Lock()
+executor = ThreadPoolExecutor(max_workers=5)
 
-    if filtered_data["CrIS_Latitude"].size > 0:
-        return {
-            "lat_min": float(filtered_data["CrIS_Latitude"].min().values),
-            "lat_max": float(filtered_data["CrIS_Latitude"].max().values),
-            "long_min": float(filtered_data["CrIS_Longitude"].min().values),
-            "long_max": float(filtered_data["CrIS_Longitude"].max().values),
-        }
-    return None
+def get_redis_connection():
+    #per request redis connection
+    if 'redis' not in g:
+        g.redis = redis.StrictRedis(host='localhost', port=6379, decode_responses=True)
+    return g.redis
 
-def list_all_files(bucket_name, prefix, client_s3):
-    """List all files in S3 bucket."""
-    file_keys = []
-    continuation_token = None
-    while True:
-        if continuation_token:
-            print(f"fetching next page with continuation token: {continuation_token}") #debug
-            response = client_s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, ContinuationToken=continuation_token)
-        else:
-            print(f"fetching first page with prefix: {prefix}") #debug
-            response = client_s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-        
-        #debug
-        # print(f"response: {response}")
+def get_user_cache():
+    """Retrieve or initialize user cache in Redis."""
+    cache_key = session.get("cache_key")
+    if not cache_key:
+        cache_key = "cache_" + secrets.token_urlsafe(8)
+        session["cache_key"] = cache_key
+        redis_client.setex(cache_key, 43200, '{"progress": {}, "results": []}')
+    user_cache = redis_client.get(cache_key)
+    if user_cache is None:
+        user_cache = {"progress": {}, "results": []}
+        redis_client.setex(cache_key, 43200, str(user_cache))
+    return eval(user_cache)
 
-        file_keys.extend([obj["Key"] for obj in response.get("Contents", [])])
-        if response.get("IsTruncated"):
-            continuation_token = response["NextContinuationToken"]
-            print("response is truncated, fetching next")
-        else:
-            print("no more pages to fetch")
-            break
-    return file_keys
+def update_user_cache(cache_key, data):
+    """Update user cache in Redis."""
+    redis_client.setex(cache_key, 43200, str(data))
 
-def process_files(data):
-    """Background function to process files."""
-    global results, progress
+def get_stop_key():
+    """Generate or retrieve the stop key for the current session."""
+    stop_key = session.get("stop_key")
+    if not stop_key:
+        stop_key = "stop_" + secrets.token_urlsafe(8)
+        session["stop_key"] = stop_key
+        redis_client.setex(stop_key, 43200, "false")  # Initialize stop_requested to false with TTL of 12 hours
+    return stop_key
 
-    bucket_name = "noaa-jpss"
-    prefix = f"NOAA20/SOUNDINGS/NOAA20_NUCAPS-CCR/{data['year']}/{str(data['month']).zfill(2)}/{str(data['day']).zfill(2)}/"
+def get_stop_flag(stop_key):
+    """Check the stop_requested flag in the Redis stop key."""
+    return redis_client.get(stop_key) == "true"
 
-    client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    file_keys = list_all_files(bucket_name, prefix, client_s3)
+def set_stop_flag(stop_key, value):
+    """Set the stop_requested flag in the Redis stop key."""
+    redis_client.setex(stop_key, 43200, "true" if value else "false")
 
-    if not file_keys:
-        progress["status"] = "no_files"
-        progress["running"] = False
-        return
+# ---------- Processing Files --------------
+def process_files(data, cache_key, stop_key):
+    with global_lock:
+        try:
+            cached_data = eval(redis_client.get(cache_key))
+            progress = cached_data["progress"]
+            results = cached_data["results"]
+            #stop_key = get_stop_key() 
+        except Exception as e:
+            print(f"error: {e}")
 
-    progress["status"] = "in_progress"
-    progress["total_files"] = len(file_keys)
-    progress["files_processed"] = 0
-    progress["stop_requested"] = False  
+        # Initialize progress
+        bucket_name = "noaa-jpss"
+        prefix = f"NOAA20/SOUNDINGS/NOAA20_NUCAPS-CCR/{data['year']}/{str(data['month']).zfill(2)}/{str(data['day']).zfill(2)}/"
+        client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
-    for key in file_keys:
-        if progress["stop_requested"]:  # Check if stop is requested
-            progress["status"] = "stopped"
-            progress["running"] = False
-            return
-
-        dataset = open_s3_dataset(bucket_name, key, client_s3)
-        filtered = filter_data(dataset, lat_min=data['lat_min'], lat_max=data['lat_max'], long_min=data['long_min'], long_max=data['long_max'])
-        if filtered:
-            if not any(result["file"] == key for result in results):  # Avoid duplicates
-                results.append({"file": key, **filtered})
-        progress["files_processed"] += 1
-
-    progress["status"] = "completed"
-    progress["running"] = False
-
-def find_aresol_file(data):
-    global results, progress
-
-    bucket_name = 'noaa-cdr-aerosol-optical-thickness-pds'
-    prefix = f"data/daily/{str(data['year'])}"
-
-    client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    
-    try:
+        print(f"Fetching file keys from bucket: {bucket_name} with prefix: {prefix}")
         file_keys = list_all_files(bucket_name, prefix, client_s3)
+        print(f"Total file keys retrieved: {len(file_keys)}")
 
         if not file_keys:
-            return f"no files found under {prefix}"
+            progress["status"] = "no_files"
+            progress["running"] = False
+            update_user_cache(cache_key, {"progress": progress, "results": results})
+            print("no file keys")
+            return
+
+        progress.update({
+            "status": "in_progress",
+            "total_files": len(file_keys),
+            "files_processed": 0,
+        })
+        update_user_cache(cache_key, {"progress": progress, "results": results})
+
+        try:
+            for key in file_keys:
+                print("loop running")
+                if get_stop_flag(stop_key):
+                    print("stop flag detected")
+                    progress.update({"status": "stopped", "running": False})
+                    update_user_cache(cache_key, {"progress": progress, "results": results})
+                    return
+
+                # Process the file
+                dataset = open_s3_dataset(bucket_name, key, client_s3)
+                filtered = filter_data(
+                    dataset,
+                    lat_min=data['lat_min'],
+                    lat_max=data['lat_max'],
+                    long_min=data['long_min'],
+                    long_max=data['long_max'],
+                )
+
+                # Update results
+                if filtered and not any(result["file"] == key for result in results):
+                    results.append({"file": key, **filtered})
+                    print("added files")
+
+                progress["files_processed"] += 1
+                update_user_cache(cache_key, {"progress": progress, "results": results})
+        except Exception as e:
+            print(f"Error in process_files: {e}")
+
+        progress.update({"status": "completed", "running": False})
+        update_user_cache(cache_key, {"progress": progress, "results": results})
+
+
+
+
+def find_aresol_file(data, cache_key, stop_key):
+
+    with global_lock:
+
+        cached_data = eval(redis_client.get(cache_key))
+        progress = cached_data["progress"]
+        results = cached_data["results"]
+
+        bucket_name = 'noaa-cdr-aerosol-optical-thickness-pds'
+        prefix = f"data/daily/{str(data['year'])}"
+
+        client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+
+        try:
+            file_keys = list_all_files(bucket_name, prefix, client_s3)
+
+            if not file_keys:
+                return f"no files found under {prefix}"
+            
+            # Create the search pattern based on the year, month, and day
+            search_pattern = f"{str(data['year'])}{str(data['month']).zfill(2)}{str(data['day']).zfill(2)}"
+            print(f"Searching for files containing: {search_pattern}")
+
+            # Loop through all files and check if the search pattern is in the key
+            for file_key in file_keys:
+                #print(file_key)
+
+                # Using a regular expression to ensure we don't match the added date at the end
+                # Example regex: A file name might end with "_cYYYYMMDD.nc", we want to avoid that
+                # This regex captures the part of the filename up until the added date
+                if re.search(rf'-avg_{search_pattern}(?=_)', file_key):
+                    results.append(file_key)
+                    print("key found")
+                    progress.update({"found_file": True, "status": "complete", "files_processed": 1})
+                    update_user_cache(cache_key, {"progress": progress, "results": results})
+                    return
         
-        # Create the search pattern based on the year, month, and day
-        search_pattern = f"{str(data['year'])}{str(data['month']).zfill(2)}{str(data['day']).zfill(2)}"
-        print(f"Searching for files containing: {search_pattern}")
+        except Exception as e:
+            return f"error searching for file: {e}"
 
-        # Loop through all files and check if the search pattern is in the key
-        for file_key in file_keys:
-            #print(file_key)
-
-            # Using a regular expression to ensure we don't match the added date at the end
-            # Example regex: A file name might end with "_cYYYYMMDD.nc", we want to avoid that
-            # This regex captures the part of the filename up until the added date
-            if re.search(rf'-avg_{search_pattern}(?=_)', file_key):
-                results.append(file_key)
-                print("key found")
-                progress["found_file"] = True
-                progress["status"] = "complete"
-                progress["files_processed"] = 1
-                print(results)
-                return
-    
-    except Exception as e:
-        return f"error searching for file: {e}"
-
+# --------- endpoints ------------
 
 @app.route("/")
 def index():
@@ -147,57 +190,73 @@ def index():
 
 @app.route("/start_query", methods=["POST"])
 def start_query():
-    """Start processing files."""
-    global results, progress
-
-    # Check if a process is already running
-    if progress.get("running", False):
-        return jsonify({"message": "Processing is already running. Please wait for it to complete."}), 400
-
-    # Reset progress and results for a new query
-    results.clear()
-    progress = {"total_files": 0, "files_processed": 0, "status": "not_started", "running": True, "found_file": False, "bucket": None}
-
     data = request.json
+    cache_key = session.get("cache_key") or "cache_" + secrets.token_urlsafe(8)
+    session["cache_key"] = cache_key
+    stop_key = get_stop_key()  # Create stop key for the session
 
-    progress["bucket"] = data["Datasets"]
+    redis_client.setex(cache_key, 43200, str({"progress": {}, "results": []}))  # Initialize cache
+    user_cache = eval(redis_client.get(cache_key))
 
-    if(data['Datasets']=='aresol_depth'):
-        thread = threading.Thread(target=find_aresol_file, args=(data,))
-        thread.start()
-        print('looking for aresol data')
-    elif(data['Datasets']=='cris_radiances'):
-        # Start the file processing in a separate thread
-        thread = threading.Thread(target=process_files, args=(data,))
-        thread.start()
+    user_cache["progress"] = {
+        "total_files": 0,
+        "files_processed": 0,
+        "status": "not_started",
+        "running": True,
+        "bucket": data["Datasets"],
+        "found_file": False,
+    }
+    user_cache["results"] = []
+    update_user_cache(cache_key, user_cache)
+
+    set_stop_flag(stop_key, False)  # Reset the stop flag to False for a new query
+
+    if data['Datasets'] == 'aresol_depth':
+        executor.submit(find_aresol_file, data, cache_key, stop_key)
+    elif data['Datasets'] == 'cris_radiances':
+        executor.submit(process_files, data, cache_key, stop_key)
 
     return jsonify({"message": "Processing started"})
 
 @app.route("/stop_query", methods=["POST"])
 def stop_query():
-    """Stop the current query without clearing results."""
-    global progress
+    stop_key = get_stop_key()
+    if get_stop_flag(stop_key):
+        return jsonify({"message": "Query already stopping..."}), 200
 
-    if progress.get("running", False):
-        progress["stop_requested"] = True  # Signal to stop processing
-        progress["status"] = "stopped"    # Update the status
-        progress["found_file"] == False
-        return jsonify({"message": "Query stopping..."}), 200
-    else:
-        return jsonify({"message": "No query is currently running."}), 400
+    set_stop_flag(stop_key, True)
+    print(f"Stop flag set for {stop_key}")
+    return jsonify({"message": "Query stopping..."}), 200
+
+@app.route("/get_progress", methods=["GET"])
+def get_progress():
+    cache_key = session.get("cache_key")
+    user_cache = eval(redis_client.get(cache_key))
+    stop_key = get_stop_key()
+    stop_requested = get_stop_flag(stop_key)
+
+    return jsonify({
+        "progress": user_cache["progress"],
+        "results": user_cache["results"],
+        "stop_requested": stop_requested,
+    })
+
+
     
+# ------------ Added features ------------ 
+
 @app.route("/download_all_files", methods=["GET"])
 def download_all_files():
     """Create a ZIP archive dynamically and send it to the user."""
-    global results
-
+    user_cache = get_user_cache()
     bucket_name = "noaa-jpss"
     client_s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
     zip_buffer = io.BytesIO() 
 
     try:
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for result in results:
+            user_cache = get_user_cache()
+            for result in user_cache["results"]:
                 file_name = result["file"]
                 try:
                     response = client_s3.get_object(Bucket=bucket_name, Key=file_name)
@@ -219,51 +278,42 @@ def download_all_files():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
-@app.route("/get_progress", methods=["GET"])
-def get_progress():
-    """Get the current progress and results."""
-    return jsonify({"progress": progress, "results": results})
-
-
-
 matplotlib.use('agg') 
 @app.route("/grid_and_render", methods=["POST"])
 def grid_and_render():
     """Grid data using files from the results list and return a map as a binary PNG."""
-    global results
+    
+    user_cache = get_user_cache()
 
     print('made it to grid route')
-    #print(sys.getsizeof(results))
 
     try:
         """bucket is named/files are pulled inside of specific gridding class to allow for this fucntion 
         to act dynamically with multiple buckets""" 
 
-        if not results:
+        if not user_cache["results"]:
             return jsonify({"error": "No files available in results for gridding"}), 400
         
         data = request.json
 
         print('made it past checking if results exist/setting data variable')
 
-        if(progress["bucket"] == "cris_radiances"):
+        if(user_cache["progress"]["bucket"] == "cris_radiances"):
             print("radiance if statement")
             try:
                 # Call the gridding function
                 plot_png = Radiance_gridding.process_and_grid(
-                    results, data)
+                    user_cache["results"], data)
             except:
                 print("radiance gridding doesnt work")
             
             # Return the PNG image
             return Response(plot_png, mimetype="image/png")
 
-        elif(progress["bucket"] == "aresol_depth"):
+        elif(user_cache["progress"]["bucket"] == "aresol_depth"):
             print('AOD if statement')
             try:
-                plot_png = AOD_gridding.grid_aresol_data(results)
+                plot_png = AOD_gridding.grid_aresol_data(user_cache["results"])
             except:
                 print("AOD gridding doesnt work")
 
@@ -273,7 +323,12 @@ def grid_and_render():
         print(f"Error during gridding: {e}")
         return jsonify({"error": str(e)}), 500
 
-
+@app.teardown_appcontext
+def close_redis(error):
+    """Cleanup Redis connection"""
+    redis_conn = g.pop('redis', None)
+    if redis_conn is not None:
+        redis_conn.close()
 
 if __name__ == "__main__":
-    app.run(port=8000, debug=True)
+    app.run(port=8000, debug=True, threaded=True)

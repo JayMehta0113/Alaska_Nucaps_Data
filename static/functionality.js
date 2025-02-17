@@ -80,7 +80,7 @@ async function pollProgress() {
                 return;
             }
 
-            if (data.progress.status === "stopped") {
+            if (data.stop_requested === true) {
                 clearInterval(pollingInterval);
                 alert("Query stopped. Results are preserved.");
                 return;
@@ -138,16 +138,6 @@ async function pollProgress() {
             const counter = document.getElementById('counter');
             counter.innerText = `Files Left: ${files_left}.  Files in range: ${count}`;
 
-            // if (files_processed > last_processed_file_count) {
-            //     last_processed_file_count = files_processed; // Update for the next swath
-
-            //     if (!isGeneratingMap) {
-            //         isGeneratingMap = true; // Prevent multiple map generations
-            //         console.log("Swath completed. Generating map...");
-            //         await generateMap(); // Generate the map for the completed swath
-            //         isGeneratingMap = false;
-            //     }
-            // }
         } catch (error) {
             clearInterval(interval);
             console.error("Error polling progress:", error);
