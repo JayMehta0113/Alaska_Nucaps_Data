@@ -62,11 +62,14 @@ async function pollProgress() {
             const response = await fetch('/get_progress');
             const data = await response.json();
 
-            console.log("progress is: "+data.progress.status)
+            console.log("progress is: " + data.progress.status)
             console.log("num files: " + data.progress.files_processed)
             console.log(data.progress)
+            if (data.progress.bucket == "aerosol_depth") {
+                const textbox = document.getElementById('results');
+                textbox.value = data.results; 
+            }
 
-            //
             if (data.progress.found_file === true){
                 clearInterval(interval);
                 alert("File Found")
@@ -83,15 +86,6 @@ async function pollProgress() {
             if (data.stop_requested === true) {
                 clearInterval(pollingInterval);
                 alert("Query stopped. Results are preserved.");
-                return;
-            }
-
-            // Stop polling if processing is complete
-            if (data.progress.status === "completed") {
-                console.log("completed")
-                clearInterval(interval);
-                alert("Processing complete!");
-                await generateMap();
                 return;
             }
 
@@ -124,19 +118,32 @@ async function pollProgress() {
                 time_left_element.innerText = `Estimated time remaining: ${mins}:${seconds < 10 ? "0" : ""}${seconds}`
             }
 
+            if(data.progress.bucket == "cris_radiances"){
             // Update the results textbox with unique files
-            var count = 0;
-            const textbox = document.getElementById('results');
-            data.results.forEach((file) => {
-                if (!processedFiles.has(file.file)) {
-                    processedFiles.add(file.file);
-                    textbox.value += `File: ${file.file}\n`;
-                    textbox.value += `Lat Range: ${file.lat_min} to ${file.lat_max}, Lon Range: ${file.long_min} to ${file.long_max}\n\n`;
-                }
-            });
+                var count = 0;
+                const textbox = document.getElementById('results');
+                data.results.forEach((file) => {
+                    if (!processedFiles.has(file.file)) {
+                        processedFiles.add(file.file);
+                        textbox.value += `File: ${file.file}\n`;
+                        textbox.value += `Lat Range: ${file.lat_min} to ${file.lat_max}, Lon Range: ${file.long_min} to ${file.long_max}\n\n`;
+                    }
+                    count++
+                });
+            }
 
             const counter = document.getElementById('counter');
             counter.innerText = `Files Left: ${files_left}.  Files in range: ${count}`;
+
+
+            // Stop polling if processing is complete
+            if (data.progress.status === "completed") {
+                console.log("completed")
+                clearInterval(interval);
+                alert("Processing complete!");
+                await generateMap();
+                return;
+            }
 
         } catch (error) {
             clearInterval(interval);

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CrIS Radiances Query</title>
+    <script src="{{ url_for('static', filename='functionality.js') }}"></script>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+    <h1>CrIS Radiances Query</h1>
+    <a href="{{ url_for('index') }}">Back to Dataset Selection</a>
+
+    <p>Certain days may be missing, consult the 
+        <a href="https://noaa-jpss.s3.amazonaws.com/index.html#NOAA20/SOUNDINGS/NOAA20_NUCAPS-CCR/">AWS bucket</a> 
+        for more information.
+    </p>
+
+    <div class="container">
+        <div class="content">
+            <form id="query-form">
+                <label for="year">Year:</label>
+                <input type="number" id="year" name="year" required><br>
+
+                <label for="month">Month:</label>
+                <input type="number" id="month" name="month" required><br>
+
+                <label for="day">Day:</label>
+                <input type="number" id="day" name="day" required><br>
+
+                <label for="lat_min">Lat min:</label>
+                <input type="number" id="lat_min" name="lat_min" value="50" min="-90" max="90"><br>
+
+                <label for="lat_max">Lat max:</label>
+                <input type="number" id="lat_max" name="lat_max" value="75" min="-90" max="90"><br>
+
+                <label for="long_min">Long min:</label>
+                <input type="number" id="long_min" name="long_min" value="-179" min="-180" max="180"><br>
+
+                <label for="long_max">Long max:</label>
+                <input type="number" id="long_max" name="long_max" value="-140" min="-180" max="180"><br>
+
+                <input type="hidden" name="Datasets" value="cris_radiances">
+
+                <button type="button" id="start-button" onclick="startProcessing()">Start Processing</button>
+            </form>
+
+            <button type="button" id="stop-button" onclick="stopProcessing()">Stop Query</button>
+            <button type="button" onclick="generateMap()">Generate Map</button>
+            <button type="button" onclick="downloadAllFilesAsZip()">Download All Files as ZIP</button>
+
+            <textarea id="results" rows="10" cols="50" readonly></textarea>
+        </div>
+
+        <div class="map-container">
+            <div id="map">
+                <img id="Map_USA" src="{{ url_for('static', filename='Static_map.png') }}" alt="Map Image">
+            
+                <div id="loading">
+                    <p>Map loading...</p>
+                    <img src="{{ url_for('static', filename='loading.gif') }}" alt="Loading...">
+                </div>
+            </div>
+            
+
+            <h2 id="counter">Files Left: 0. Files in range: 0</h2>
+            <h2 id="time_spent">Elapsed time: --:--</h2>
+            <h2 id="time_left">Estimated time remaining: --:--</h2>
+        </div>
+    </div>
+
+</body>
+</html>

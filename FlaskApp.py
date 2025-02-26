@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify, Response, session, g #
+from flask import Flask, request, render_template, jsonify, Response, session, redirect, url_for, g #
 from concurrent.futures import ThreadPoolExecutor
 from flask_session import Session
 import boto3 #
@@ -188,6 +188,23 @@ def index():
     """Render the main page."""
     return render_template("index.html")
 
+@app.route('/select_dataset', methods=['POST'])
+def select_dataset():
+    dataset = request.form.get('dataset')
+    if dataset == 'cris_radiances':
+        return redirect(url_for('cris_radiances'))
+    elif dataset == 'aerosol_depth':
+        return redirect(url_for('aerosol_depth'))
+    return redirect(url_for('index'))
+
+@app.route('/cris_radiances')
+def cris_radiances():
+    return render_template('cris_radiances.html')
+
+@app.route('/aerosol_depth')
+def aerosol_depth():
+    return render_template('aerosol_depth.html')
+
 @app.route("/start_query", methods=["POST"])
 def start_query():
     data = request.json
@@ -211,7 +228,7 @@ def start_query():
 
     set_stop_flag(stop_key, False)  # Reset the stop flag to False for a new query
 
-    if data['Datasets'] == 'aresol_depth':
+    if data['Datasets'] == 'aerosol_depth':
         executor.submit(find_aresol_file, data, cache_key, stop_key)
     elif data['Datasets'] == 'cris_radiances':
         executor.submit(process_files, data, cache_key, stop_key)
@@ -310,7 +327,7 @@ def grid_and_render():
             # Return the PNG image
             return Response(plot_png, mimetype="image/png")
 
-        elif(user_cache["progress"]["bucket"] == "aresol_depth"):
+        elif(user_cache["progress"]["bucket"] == "aerosol_depth"):
             print('AOD if statement')
             try:
                 plot_png = AOD_gridding.grid_aresol_data(user_cache["results"])
