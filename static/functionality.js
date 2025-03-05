@@ -97,11 +97,12 @@ async function pollProgress() {
                 elasped_seconds = (Date.now() - start_time)/1000;
             }
 
-
-            const current_mins = Math.floor(elasped_seconds/60);
-            const current_secs = Math.floor(elasped_seconds%60);
-            const elapsed_time_element = document.getElementById("time_spent")
-            elapsed_time_element.innerText = `Elapsed time: ${current_mins}:${current_secs < 10 ? "0" : ""}${current_secs}`
+            if(data.progress.results == "aerosol_depth"){
+                const current_mins = Math.floor(elasped_seconds/60);
+                const current_secs = Math.floor(elasped_seconds%60);
+                const elapsed_time_element = document.getElementById("time_spent")
+                elapsed_time_element.innerText = `Elapsed time: ${current_mins}:${current_secs < 10 ? "0" : ""}${current_secs}`
+            }
 
             const total_files = data.progress.total_files;
             const files_processed = data.progress.files_processed;
@@ -202,11 +203,11 @@ async function downloadAllFilesAsZip() {
 }
 
 async function generateMap() {
-    const loadingElement = document.getElementById("loading");
-    const mapViewer = document.getElementById("Map_USA");
-
     const formData = new FormData(document.getElementById('query-form'));
     const data = Object.fromEntries(formData.entries());
+    
+    const loadingElement = document.getElementById("loading");
+    loadingElement.style.display = "block";
 
     // Convert string inputs to numbers
     data.lat_min = parseInt(data.lat_min)
@@ -215,31 +216,65 @@ async function generateMap() {
     data.long_max = parseInt(data.long_max)
 
     try {
-        // Show the loading GIF
-        loadingElement.style.display = "block";
+        console.log("Requesting tif...");
 
-        // Fetch the map image from the backend
-        const response = await fetch('/grid_and_render', { 
+        // Fetch TIFF data from Flask
+        const response = await fetch("grid_and_render", {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || "Failed to generate map.");
+            throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
         }
 
-        const blob = await response.blob();
-        const objectURL = URL.createObjectURL(blob);
+        console.log(response.headers);
 
-        // Update the map image
-        mapViewer.src = objectURL;
+        const contentType = response.headers.get("Content-Type");
+        console.log(`Content-Type: ${contentType}`);
+
+        console.log("tif received, parsing...");
+
+        //Ensure non-empty TIFF data
+        const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength === 0) {
+            throw new Error("Received empty tif data!");
+        }
+
+        const georaster = await parseGeoraster(arrayBuffer);
+
+        console.log("Corrected tif Bounds:", {
+            minLat: georaster.ymin,
+            maxLat: georaster.ymax,
+            minLon: georaster.xmin,
+            maxLon: georaster.xmax
+        });
+
+        let layer = new GeoRasterLayer({
+            georaster: georaster,
+            opacity: 0.6,
+            resolution: 256,
+            pixelValuesToColorFn: values => {
+                if (values[0] === 0 && values[1] === 0 && values[2] === 0) {
+                    return null;  //Make black pixels transparent
+                }
+                return `rgb(${values[0]}, ${values[1]}, ${values[2]})`;
+            }
+        });
+
+        layer.addTo(map);
+
+        //Apply correct bounding box
+        map.fitBounds([[georaster.ymin, georaster.xmin], [georaster.ymax, georaster.xmax]]);
+        console.log("tif successfully displayed!");
+
     } catch (error) {
         console.error("Error generating map:", error);
-        alert("Failed to generate map.");
+        alert(`Failed to generate map: ${error.message}`);
     } finally {
-        // Hide the loading GIF
-        loadingElement.style.display = "none";
+        if (loadingElement) {
+            loadingElement.style.display = "none";
+        }
     }
 }

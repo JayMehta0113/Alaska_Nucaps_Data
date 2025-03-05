@@ -319,22 +319,22 @@ def grid_and_render():
             print("radiance if statement")
             try:
                 # Call the gridding function
-                plot_png = Radiance_gridding.process_and_grid(
+                plot_tif = Radiance_gridding.process_and_grid(
                     user_cache["results"], data)
             except:
                 print("radiance gridding doesnt work")
             
             # Return the PNG image
-            return Response(plot_png, mimetype="image/png")
+            return Response(plot_tif, mimetype="image/tiff")
 
         elif(user_cache["progress"]["bucket"] == "aerosol_depth"):
             print('AOD if statement')
             try:
-                plot_png = AOD_gridding.grid_aresol_data(user_cache["results"])
+                plot_tif = AOD_gridding.grid_aresol_data(user_cache["results"])
             except:
                 print("AOD gridding doesnt work")
 
-            return Response(plot_png, mimetype="image/png")
+            return Response(plot_tif, mimetype="image/tiff") #change mimetype maybe
 
     except Exception as e:
         print(f"Error during gridding: {e}")

@@ -21,3 +21,4 @@ dependencies:
   - certifi
   - redis
   - gunicorn
+  - rasterio

@@ -1,8 +1,10 @@
+    
+# new way with sending just points to leaflet frontend
 import xarray as xr
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import numpy as np
+from rasterio.transform import from_origin
+from rasterio.io import MemoryFile
+import matplotlib.pyplot as plt
 import io
 import boto3
 from botocore.config import Config
@@ -24,42 +26,60 @@ def grid_aresol_data(file_key):
 
     print("opened the file from s3 bucket")
 
-    # Extract aerosol optical depth (AOT) data
-    aot = data['aot1'].isel(time=0)  
-    lat = data['latitude']
-    lon = data['longitude']
+    aot = data['aot1'].isel(time=0).values  
 
-    # Check for missing data
-    total_points = np.prod(aot.shape)
-    missing_points = np.isnan(aot).sum().item()
-    missing_percentage = (missing_points / total_points) * 100
-    print(f"Total data points: {total_points}")
-    print(f"Missing data points: {missing_points} ({missing_percentage:.2f}% missing)")
+    lat = data['latitude'].values
+    lon = data['longitude'].values
 
-    # Plot the data on a world map
-    fig = plt.figure(figsize=(14, 8))
-    ax = plt.axes(projection=ccrs.PlateCarree())
+    aot_flipped = np.flipud(aot)  #raster shows up flipped (north/south), this flips it back to normal
 
-    # Add map features (drawn first)
-    ax.coastlines(resolution='50m', color='black', linewidth=1)
-    ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
-    ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgray')
-    ax.add_feature(cfeature.OCEAN, edgecolor='none', facecolor='lightblue')
+    """
+    defining acceptable ranges based on high and low values in datase.
+    this removes negative values with np.clip(). According to documentation: 
+    (https://noaa-cdr-aerosol-optical-thickness-pds.s3.amazonaws.com/index.html#documentation/), this is okay for single
+    day retrevals, however, in long term statistics, make sure to include negative values.
+    """                
+    aot_min, aot_max = 0, 0.5  
+    aot_flipped = np.clip(aot_flipped, 0, 5)
 
-    # Plot AOT data 
-    aot_plot = plt.pcolormesh(lon, lat, aot, cmap='viridis', shading='auto', transform=ccrs.PlateCarree())
+    print(f"min aot: {np.nanmin(aot_flipped)}, max: {np.nanmax(aot_flipped)}")
+    print(f"percent of points over 0.5: {(np.sum(aot_flipped>0.5)/np.size(aot_flipped))*100}")
 
-    # Add colorbar and labels
-    cbar = plt.colorbar(aot_plot, orientation='vertical', pad=0.05)
-    cbar.set_label('Aerosol Optical Thickness (AOT)')
-    plt.title('Global Aerosol Optical Thickness (AOT)')
-    plt.xlabel('Longitude')
-    plt.ylabel('Latitude')
+    #creating the color map
+    colormap = plt.colormaps.get_cmap("viridis")  
+    rgb = colormap(aot_flipped)[:, :, :3]  
+    rgb = (rgb * 255).astype(np.uint8).transpose(2, 0, 1) 
 
-    #return the plot to server
-    output = io.BytesIO()
-    plt.savefig(output, format="png")
-    plt.close(fig)
-    output.seek(0)
-    return output
+    #setting pixel size for gridded points
+    pixel_width = (lon.max() - lon.min()) / aot.shape[1]
+    pixel_height = (lat.max() - lat.min()) / aot.shape[0]
+    transform = from_origin(lon.min(), lat.max(), pixel_width, -pixel_height)  
+
+    #creating tif file, this will be overlayed on leaflet map
+    tif_buffer = io.BytesIO()
+    with MemoryFile(tif_buffer) as memfile:
+        with memfile.open(
+            driver="GTiff",
+            height=aot.shape[0], width=aot.shape[1],
+            count=3,  # RGB bands
+            dtype=np.uint8,
+            crs="EPSG:4326",
+            transform=transform,
+        ) as data_raster:
+            data_raster.write(rgb)
+            print('data written to raster')
+
+        memfile.seek(0)
+        tif_bytes = memfile.read()
+        tif_buffer.write(tif_bytes)
+
+
+    #Reset buffer position before sending
+    tif_buffer.seek(0)
+    buffer_size = len(tif_buffer.getvalue())
+
+    print(f"✅ Final TIFF buffer size: {buffer_size} bytes")
     
+    if buffer_size == 0:
+        print("❌ Error: TIFF buffer is empty!")
+    return tif_buffer

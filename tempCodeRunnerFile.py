@@ -1,1 +1,1 @@
-utils
+data/daily/{str(data['year'])}"

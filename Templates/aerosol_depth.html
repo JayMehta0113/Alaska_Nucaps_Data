@@ -3,13 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <title>Aerosol Depth Query</title>
-    <script src="{{ url_for('static', filename='functionality.js') }}"></script>
-    <script>
-        function displayFile(){
-            
-        }
-    </script>
+
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+
+    <!--leaflet imlpementation-->
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""/>
+    <!--put this AFTER Leaflet's CSS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+
+    <!--Load leaflet-geotiff and georaster dependencies -->
+    <script src="https://unpkg.com/georaster"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+
+    <script src="{{ url_for('static', filename='functionality.js') }}"></script>
+
 </head>
 <body>
 
@@ -47,13 +59,12 @@
         </div>
 
         <div class="map-container">
-            <div id="map">
-                <img id="Map_USA" src="{{ url_for('static', filename='aod_blank.png') }}" alt="Map Image">
-            
-                <div id="loading">
-                    <p>Map loading...</p>
-                    <img src="{{ url_for('static', filename='loading.gif') }}" alt="Loading...">
-                </div>
+
+            <div id="map"></div>
+
+            <div id="loading">
+                <p>Map loading...</p>
+                <img src="{{ url_for('static', filename='loading.gif') }}" alt="Loading...">
             </div>
 
             <textarea id="results" rows="10" cols="50" readonly></textarea>
@@ -61,5 +72,81 @@
         </div>
     </div>
 
+
+        <!--leaflet configuration-->
+        <script>
+
+            // Initialize the map
+            var map = L.map('map', {
+                minZoom: 1,
+                maxZoom: 8,
+                maxBounds: [[-88, -180], [88, 180]],
+                maxBoundsViscosity: 1
+            }).setView([0, 0], 1);
+
+            L.Control.colorbar = L.Control.extend({
+                onAdd: function(map) {
+                    var img = L.DomUtil.create('img');
+    
+                    img.src = 'static/colorbar.png';
+                    img.style.width = '500px';
+                    img.style.height = '80px'
+    
+                    return img;
+                },
+    
+                onRemove: function(map) {
+                    // Nothing to do here
+                }
+            });
+    
+            L.control.colorbar = function(opts) {
+                return new L.Control.colorbar(opts);
+            }
+    
+            L.control.colorbar({ position: 'bottomleft' }).addTo(map);
+
+             // Add base layer
+             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            console.log('done making map')
+
+    
+            // Fetch and display the GeoTIFF
+            // fetch("http://localhost:8000/aot_colored.tif")
+            // .then(response => response.arrayBuffer())
+            // .then(arrayBuffer => parseGeoraster(arrayBuffer))
+            // .then(georaster => {
+            //     console.log("Corrected GeoTIFF Bounds:", {
+            //         minLat: georaster.ymin, 
+            //         maxLat: georaster.ymax, 
+            //         minLon: georaster.xmin, 
+            //         maxLon: georaster.xmax
+            //     });
+    
+            //     let layer = new GeoRasterLayer({
+            //         georaster: georaster,
+            //         opacity: 0.6,
+            //         resolution: 256,
+            //         pixelValuesToColorFn: values => {
+            //             if (values[0] === 0 && values[1] === 0 && values[2] === 0) {
+            //                 return null;  //Make black pixels transparent
+            //             }
+            //             return `rgb(${values[0]}, ${values[1]}, ${values[2]})`;
+            //         }
+            //     });
+    
+            //     layer.addTo(map);
+    
+            //     //Apply correct bounding box
+            //     map.fitBounds([[georaster.ymin, georaster.xmin], [georaster.ymax, georaster.xmax]]);
+            // })
+            // .catch(error => console.error("Error loading GeoTIFF:", error));
+    
+        </script>
 </body>
+
 </html>
+
