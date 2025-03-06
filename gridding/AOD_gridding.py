@@ -77,9 +77,7 @@ def grid_aresol_data(file_key):
     #Reset buffer position before sending
     tif_buffer.seek(0)
     buffer_size = len(tif_buffer.getvalue())
-
-    print(f"✅ Final TIFF buffer size: {buffer_size} bytes")
     
     if buffer_size == 0:
-        print("❌ Error: TIFF buffer is empty!")
+        print("Error: TIFF buffer is empty!")
     return tif_buffer
